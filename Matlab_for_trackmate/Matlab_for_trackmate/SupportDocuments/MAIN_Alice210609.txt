@@ -1,0 +1,205 @@
+%% main code to run
+codepath = 'C:/Users/aperucca/Documents/Matlab_analysis_tracking/Matlab_for_trackmateV2'   %Codes directory
+cd(codepath)
+
+% In the same folder, put the first image of each stack (CAF channel)
+% Put the corresponding trackmate outputs named as "  nameofyourimage_Tracks.xml  "
+path  = uigetdir('/media/clement-hallopeau/Elements/Stage2021/DATA/SAMPLE_DATA/Trackmate_for_matlab_2')
+tiffiles = struct2table(dir(fullfile(path,'*tif*'))).name  ;%list of current images in the folder
+trackfiles = struct2table(dir(fullfile(path,'*xml*'))).name  ;%list of the xml/tracks in the folder
+
+%% Measure and save the intensity profiles of the given images
+disp(sprintf('\n *****Intensity Profiles*****'))
+%radius in µm
+for k =  1:length(tiffiles)
+    file = char(tiffiles(k)) ;
+    disp(file)
+    Window_size = 2; %in micrometre, the lower the more accurate but also the more noisy will be the intensity profile
+    % at a distance 'd' from the spheroid center, window_size = x microns
+    % means we'll measure the intensity of a slice centered on 'd',
+    % spanning on x microns (d-x/2 , d+x/2)
+    
+    % Definition of px_to_micro depending on the image size
+    px_to_micro = 0.3225*2048/size(imread([path,filesep,file]),1) ;
+    cd(codepath)
+    analyze_intensity(path, px_to_micro,Window_size, file) ; 
+end
+
+% output in micrometers
+disp('*****Intensity Profiles DONE*****')
+
+
+%% Measure and save morphological parameters
+
+disp(sprintf('\n *****Morphological Parameters*****'))
+
+for k = 1 : length(tiffiles)
+    file = char(tiffiles(k)) ;
+    cd(codepath)
+    morpho_params(path, file) ;
+end
+
+disp(sprintf('\n *****Morphological Parameters     DONE__',char(datetime('now','Format','HH:mm:ss')),'*****'))
+
+%%  create dataset
+
+% create a new dataframe
+% X, Y, filename, cells ID, parameters
+%DATA = table([], 'VariableNames', {'X', 'Y', 'ID','dist', 'Area', 'Majax','Minax','Circularity','Orientation'})
+
+DATA = table
+
+leg = {'IN', 'EDGE','OUT'} ; 
+
+count = zeros(length(tiffiles), length(leg)) ;  ; countrack = count ; 
+areas = zeros(length(tiffiles), length(leg)) ; ;; 
+CELLDENSITY = table(repmat("NaN", length(tiffiles),1),zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN,zeros(length(tiffiles),1)*NaN, ... 
+    'VariableNames', {'File', 'D_IN_PosPerArea', 'D_EDGE_PosPerArea', 'D_OUT_PosPerArea', 'D_IN_TracksPerArea', 'D_EDGE_TracksPerArea', 'D_OUT_TracksPerArea', 'SIN', 'SEDGE','SOUT'}) ;
+% CELLDENSITY (table) : 1 line par file/experiment, 1 column par bin + column with filenames
+
+for i = 1:length(tiffiles)
+
+    file = char(tiffiles(i)) ;;
+    
+    % Definition of px_to_micro depending on the image size
+    px_to_micro = 0.3225*2048/size(imread([path, filesep, file]),1) ;
+    
+    disp([file, sprintf('\n'), 'Input the time between 2 frames (seconds)', sprintf('\n')])
+    dt = input('') ;;
+    disp(sprintf('\n'))
+    
+    cd(codepath) ;
+    % tracks is the output from the morphological measures
+    tracks = load([path,'/Morpho_params/',file(1:end-4),'_Morphoparams.mat']).trackscleaned ;
+    
+    load([path,'/Profiles/',file(1:end-4),'_Profile.mat']) ;
+     
+    %%%%%%%%% Define the bins %%%%%%%%%%%
+    %
+    %PROFILE.center(4)-120/px_to_micro =0 if I consider all the IN
+    %rbins =  [PROFILE.center(4)-120/px_to_micro, PROFILE.center(4), PROFILE.center(4)+120/px_to_micro, PROFILE.center(4)+2*120/px_to_micro] ; 
+    rbins =  [0, PROFILE.center(4), PROFILE.center(4)+120/px_to_micro, PROFILE.center(4)+2*120/px_to_micro] ; 
+    %%%%%%%%% Define the bins %%%%%%%%%%%
+
+
+    tracks.Area = px_to_micro^2*tracks.Area ;
+    % we create a new table called data, to pick only only the columns from
+    % "tracks" that are interesting, and process them. For instance, tracks
+    % contains the matlab positions' assigned to each trackmate position
+    % (Xm, Ym), we don't use them. 
+    data =  tracks(:,[1:4,7:end])  ;
+    data.dist = px_to_micro * (data.dist-PROFILE.center(4)) ; %convert in distance to spheroid edge rather than distance to spheroid center
+
+    
+    % Compute mean cell area 
+    IDs = unique(tracks.ID) ; 
+    data.('Mean_Area') = zeros(size(data,1),1) ; 
+    for ii = 1:length(IDs)
+        pos = find(tracks.ID == IDs(ii)) ; ;
+        data.Mean_Area(pos) = ones(length(data.Mean_Area(pos)),1) * mean(tracks.Area(pos)) ;
+    end
+    
+    % Assign each position to a category
+    data.('Bin') = repmat("NaN",size(data,1),1) ; 
+    for j = 2:length(rbins) %take the limits on each bin
+        % and find the positions where the cells are within the limits of
+        % the considered bin (  [bin(j), bin(j-)]  )
+        pos = find(tracks.dist < rbins(j) & tracks.dist > rbins(j-1)) ; %use tracks.dist (dist to sphero center) and not data.dist (dist to edge), because the bins are defined based on the sphero radius/center
+        data.Bin(pos) = repmat(leg{j-1}, length(pos), 1) ; 
+    end
+    
+ 
+    
+    % assign an angle of displacement from 1 pos 2 another
+    data.('Theta') = zeros(size(data,1),1)*NaN ; 
+    IDs = unique(tracks.ID) ; 
+    
+    %%%%%%%%%% Set the step size to quantify angles %%%%%%%%%%
+                                                        step = 4 ;
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    for j = 1:length(IDs)
+        pos = find(tracks.ID == IDs(j)) ; 
+        vcenter=[PROFILE.center(1) - tracks.X(pos(1:end-step)),   PROFILE.center(2)-tracks.Y(pos(1:end-step))]  ;% distance to the center (so attribution of the cell parameters to a bin) is computed using the start position of the cell
+        vsegm=[tracks.X(pos(1+step:end)) - tracks.X(pos(1:end-step)),    tracks.Y(pos(1+step:end)) - tracks.Y(pos(1:end-step))]; ;
+        ang = rad2deg(acos(dot(vcenter, vsegm,2) ./ (vecnorm(vcenter,2,2) .* vecnorm(vsegm,2,2))))  ;
+        %ang(ang>90) = 180 - ang(ang>90) ;
+        data.Theta(pos(1:end-step)) = ang ; 
+    end
+    
+    % assign instant speed & displacements from 1 pos 2 another & mean speed to all pos
+    data.('Di') = zeros(size(data,1),1)*NaN ;
+    data.('Dm') = zeros(size(data,1),1)*NaN ;
+    data.('Vi') = zeros(size(data,1),1)*NaN ;
+    data.('Vm') = zeros(size(data,1),1)*NaN ;
+    for j = 1:length(IDs)
+        pos = find(tracks.ID == IDs(j)) ;
+        vsegm=[tracks.X(pos(2:end)) - tracks.X(pos(1:end-1)),    tracks.Y(pos(2:end)) - tracks.Y(pos(1:end-1))]; ;
+        data.Di(pos) = px_to_micro .* [vecnorm(vsegm, 2,2)', NaN]' ; ; 
+        data.Dm(pos) = px_to_micro .* ones(size(data.Vm(pos),1),1) * mean(vecnorm(vsegm, 2,2)) ;
+        data.Vi(pos) = px_to_micro./(dt/60.*tracks.dt(pos)) .* [vecnorm(vsegm, 2,2)', NaN]' ; ; 
+        data.Vm(pos) = px_to_micro./(dt/60.*tracks.dt(pos)) .* ones(size(data.Vm(pos),1),1) * mean(vecnorm(vsegm, 2,2)) ;
+    end; 
+    
+    
+    % Roundess and mean roundess (Xu et al)
+    data.('Ri') = zeros(size(data,1),1)*NaN ;
+    data.('Rm') = zeros(size(data,1),1)*NaN ;
+    
+   for j = 1:length(IDs)
+        pos = find(tracks.ID == IDs(j)) ;
+        circsc = tracks.Area(pos)./(pi*(tracks.Majax(pos)./2).^2) ; 
+        data.Ri(pos) = circsc ; 
+        data.Rm(pos) = ones(size(data.Rm(pos),1),1) * mean(circsc) ; 
+    end; 
+    
+    % aspect factor and mean aspect factor (min axis / maj axis)
+    data.('AFi') = zeros(size(data,1),1)*NaN ;
+    data.('AFm') = zeros(size(data,1),1)*NaN ;
+    for j = 1:length(IDs)
+        pos = find(tracks.ID == IDs(j)) ;
+        circsc = tracks.Minax(pos)./tracks.Majax(pos) ;  
+        data.AFi(pos) = circsc ; 
+        data.AFm(pos) = ones(size(data.AFm(pos),1),1) * mean(circsc) ; 
+    end; 
+    
+    
+    % Cell density
+    CELLDENSITY.File(i) = string(file) ; 
+        % Compute the distance matrix
+	x=1:size(imread([path, filesep, file]),1); ; 	y=x; ; 	x_c=PROFILE.center(1); ; 	y_c=PROFILE.center(2);
+
+	% R_mat = distance matrix   =  in pixels
+	R_mat = zeros(length(x)); ; 
+	for j=1:length(x)
+	    R_mat(:,j)=sqrt( (j-x_c)^2 + (y - y_c).^2)   ;
+	end
+	% count how many positions in each region
+	for j = 1:length(leg)
+		pos = find(data.Bin == leg{j});% number of positions stamped "IN", or EDGE"
+		area = length(find(R_mat < rbins(j+1) & R_mat > rbins(j)))*(px_to_micro)^2 ; % Area in squared micrometers 
+		count(i,j) = length(pos)/area ; 
+		areas(i,j) = area ; 
+        countrack(i,j) = length(unique(data.ID(pos)))/area ;  ; 
+    end
+	
+
+    
+    data = [table(repmat(string(file(1:end-4)), size(data,1),1), 'VariableName',{'File'}), data] ; 
+    DATA = [DATA; data] ; 
+    
+end
+
+for j = 1:length(leg)
+	CELLDENSITY.(['D_',leg{j},'_PosPerArea']) = count(:,j) ; 
+    CELLDENSITY.(['D_',leg{j},'_TracksPerArea']) = countrack(:,j) ; 
+	CELLDENSITY.(['S',leg{j}]) = areas(:,j) ; 
+end
+
+
+    % export in csv
+cd(path)
+name = pwd ; ; pos = find(name == '\') ; ; pos = pos(end) ;name = name(pos+1:end) ;% name of the csv = name of the folder
+writetable(DATA, [name,'.csv']) ;
+writetable(CELLDENSITY, ['CELLDENSITY.csv']) ;
+
