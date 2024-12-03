@@ -38,7 +38,7 @@ The output of "MAIN.m" includes:
 
 Additional useful information:
 - in the section 'Draw the edge' the user will be asked to draw a poligon along the CAF edge and then to validate the drawing.
-- in the section 'Measure and save morphological parameters' the user will be asked to manually validate each track (between Trackmate and Matlab???)
+- in the section 'Measure and save morphological parameters' the user will be asked to manually validate each track (between Trackmate and Matlab)
 - in the section 'create dataset' the user will be asked to input the time between 2 frames (seconds) for each position.
 
 Time required: few minutes.
